@@ -1,2 +1,2 @@
 # Profiling
-! [cpu profiling](https://github.com/enajera/indexer/profiling/profile_heap.png)
+! [cpu profiling](https://github.com/enajera/indexer/blob/version_funcional/profiling/profile_heap.png?raw=true)
