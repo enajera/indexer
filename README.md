@@ -1,5 +1,5 @@
 # Profiling 📊
-## Heap 
+## CPU - Heap 
 
 ![HEAP](profiling/profile_heap.png)
 
