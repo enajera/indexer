@@ -1,0 +1,1489 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="374" onload="init(evt)" viewBox="0 0 1200 374" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom(true);
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				// we have basically done a clearzoom so clear the url
+				var params = get_params();
+				if (params.x) delete params.x;
+				if (params.y) delete params.y;
+				history.replaceState(null, null, parse_params(params));
+				unzoombtn.classList.add("hide");
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		var sl = t.getSubStringLength(0, txt.length);
+		// check if only whitespace or if we can fit the entire string into width w
+		if (/^ *$/.test(txt) || sl < w)
+			return;
+
+		// this isn't perfect, but gives a good starting point
+		// and avoids calling getSubStringLength too often
+		var start = Math.floor((w/sl) * txt.length);
+		for (var x = start; x > 0; x = x-2) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom(dont_update_text) {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			if(!dont_update_text) update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="374.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >Flame Graph</text>
+<text id="details" x="10.00" y="357" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="357" > </text>
+<g id="frames">
+<g >
+<title>syscall.WriteConsole (12 samples, 1.70%)</title><rect x="120.5" y="181" width="20.1" height="15.0" fill="rgb(238,142,12)" rx="2" ry="2" />
+<text  x="123.47" y="191.5" ></text>
+</g>
+<g >
+<title>runtime.park_m (2 samples, 0.28%)</title><rect x="1166.6" y="293" width="3.3" height="15.0" fill="rgb(219,14,48)" rx="2" ry="2" />
+<text  x="1169.57" y="303.5" ></text>
+</g>
+<g >
+<title>net/http.(*persistConn).roundTrip (1 samples, 0.14%)</title><rect x="189.1" y="165" width="1.7" height="15.0" fill="rgb(249,129,6)" rx="2" ry="2" />
+<text  x="192.09" y="175.5" ></text>
+</g>
+<g >
+<title>syscall.SyscallN (1 samples, 0.14%)</title><rect x="55.2" y="133" width="1.7" height="15.0" fill="rgb(226,12,44)" rx="2" ry="2" />
+<text  x="58.19" y="143.5" ></text>
+</g>
+<g >
+<title>syscall.SyscallN (1 samples, 0.14%)</title><rect x="61.9" y="69" width="1.7" height="15.0" fill="rgb(228,24,14)" rx="2" ry="2" />
+<text  x="64.89" y="79.5" ></text>
+</g>
+<g >
+<title>runtime.greyobject (5 samples, 0.71%)</title><rect x="108.8" y="229" width="8.3" height="15.0" fill="rgb(218,26,11)" rx="2" ry="2" />
+<text  x="111.75" y="239.5" ></text>
+</g>
+<g >
+<title>runtime.memmove (17 samples, 2.41%)</title><rect x="157.3" y="213" width="28.4" height="15.0" fill="rgb(226,190,54)" rx="2" ry="2" />
+<text  x="160.29" y="223.5" >ru..</text>
+</g>
+<g >
+<title>io.Copy (1 samples, 0.14%)</title><rect x="63.6" y="149" width="1.6" height="15.0" fill="rgb(229,64,8)" rx="2" ry="2" />
+<text  x="66.56" y="159.5" ></text>
+</g>
+<g >
+<title>net/textproto.validHeaderFieldByte (1 samples, 0.14%)</title><rect x="56.9" y="245" width="1.6" height="15.0" fill="rgb(253,28,26)" rx="2" ry="2" />
+<text  x="59.87" y="255.5" ></text>
+</g>
+<g >
+<title>runtime.gentraceback (1 samples, 0.14%)</title><rect x="187.4" y="85" width="1.7" height="15.0" fill="rgb(237,190,20)" rx="2" ry="2" />
+<text  x="190.42" y="95.5" ></text>
+</g>
+<g >
+<title>net/http.(*Request).SetBasicAuth (1 samples, 0.14%)</title><rect x="142.2" y="245" width="1.7" height="15.0" fill="rgb(205,134,33)" rx="2" ry="2" />
+<text  x="145.23" y="255.5" ></text>
+</g>
+<g >
+<title>bufio.(*Writer).ReadFrom (2 samples, 0.28%)</title><rect x="61.9" y="229" width="3.3" height="15.0" fill="rgb(225,130,25)" rx="2" ry="2" />
+<text  x="64.89" y="239.5" ></text>
+</g>
+<g >
+<title>syscall.SyscallN (3 samples, 0.43%)</title><rect x="46.8" y="117" width="5.0" height="15.0" fill="rgb(226,84,45)" rx="2" ry="2" />
+<text  x="49.82" y="127.5" ></text>
+</g>
+<g >
+<title>unicode/utf16.Encode (1 samples, 0.14%)</title><rect x="140.6" y="181" width="1.6" height="15.0" fill="rgb(209,95,18)" rx="2" ry="2" />
+<text  x="143.55" y="191.5" ></text>
+</g>
+<g >
+<title>runtime.nextFreeFast (1 samples, 0.14%)</title><rect x="190.8" y="133" width="1.6" height="15.0" fill="rgb(240,207,14)" rx="2" ry="2" />
+<text  x="193.77" y="143.5" ></text>
+</g>
+<g >
+<title>runtime.findRunnable (1 samples, 0.14%)</title><rect x="1166.6" y="261" width="1.6" height="15.0" fill="rgb(206,4,12)" rx="2" ry="2" />
+<text  x="1169.57" y="271.5" ></text>
+</g>
+<g >
+<title>internal/poll.(*FD).decref (1 samples, 0.14%)</title><rect x="55.2" y="197" width="1.7" height="15.0" fill="rgb(228,198,43)" rx="2" ry="2" />
+<text  x="58.19" y="207.5" ></text>
+</g>
+<g >
+<title>runtime.greyobject (1 samples, 0.14%)</title><rect x="185.7" y="69" width="1.7" height="15.0" fill="rgb(232,207,25)" rx="2" ry="2" />
+<text  x="188.74" y="79.5" ></text>
+</g>
+<g >
+<title>runtime.stdcall1 (2 samples, 0.28%)</title><rect x="1185.0" y="213" width="3.3" height="15.0" fill="rgb(210,193,15)" rx="2" ry="2" />
+<text  x="1187.98" y="223.5" ></text>
+</g>
+<g >
+<title>net/textproto.(*Reader).ReadMIMEHeader (2 samples, 0.28%)</title><rect x="56.9" y="261" width="3.3" height="15.0" fill="rgb(243,9,28)" rx="2" ry="2" />
+<text  x="59.87" y="271.5" ></text>
+</g>
+<g >
+<title>runtime.cgocall (1 samples, 0.14%)</title><rect x="60.2" y="133" width="1.7" height="15.0" fill="rgb(227,218,43)" rx="2" ry="2" />
+<text  x="63.21" y="143.5" ></text>
+</g>
+<g >
+<title>internal/singleflight.(*Group).doCall (1 samples, 0.14%)</title><rect x="10.0" y="309" width="1.7" height="15.0" fill="rgb(221,163,6)" rx="2" ry="2" />
+<text  x="13.00" y="319.5" ></text>
+</g>
+<g >
+<title>syscall.SyscallN (573 samples, 81.28%)</title><rect x="199.1" y="165" width="959.1" height="15.0" fill="rgb(248,41,3)" rx="2" ry="2" />
+<text  x="202.13" y="175.5" >syscall.SyscallN</text>
+</g>
+<g >
+<title>runtime.bgsweep (6 samples, 0.85%)</title><rect x="66.9" y="309" width="10.1" height="15.0" fill="rgb(234,137,17)" rx="2" ry="2" />
+<text  x="69.91" y="319.5" ></text>
+</g>
+<g >
+<title>syscall.CreateFile (573 samples, 81.28%)</title><rect x="199.1" y="197" width="959.1" height="15.0" fill="rgb(233,218,53)" rx="2" ry="2" />
+<text  x="202.13" y="207.5" >syscall.CreateFile</text>
+</g>
+<g >
+<title>internal/poll.(*FD).ConnectEx.func1 (8 samples, 1.13%)</title><rect x="31.8" y="133" width="13.3" height="15.0" fill="rgb(216,23,27)" rx="2" ry="2" />
+<text  x="34.76" y="143.5" ></text>
+</g>
+<g >
+<title>runtime.sysUnusedOS (8 samples, 1.13%)</title><rect x="1171.6" y="245" width="13.4" height="15.0" fill="rgb(232,228,8)" rx="2" ry="2" />
+<text  x="1174.59" y="255.5" ></text>
+</g>
+<g >
+<title>main.main (620 samples, 87.94%)</title><rect x="120.5" y="293" width="1037.7" height="15.0" fill="rgb(210,107,20)" rx="2" ry="2" />
+<text  x="123.47" y="303.5" >main.main</text>
+</g>
+<g >
+<title>syscall.SetsockoptInt (1 samples, 0.14%)</title><rect x="51.8" y="197" width="1.7" height="15.0" fill="rgb(206,38,37)" rx="2" ry="2" />
+<text  x="54.84" y="207.5" ></text>
+</g>
+<g >
+<title>syscall.Bind (3 samples, 0.43%)</title><rect x="46.8" y="165" width="5.0" height="15.0" fill="rgb(254,12,11)" rx="2" ry="2" />
+<text  x="49.82" y="175.5" ></text>
+</g>
+<g >
+<title>runtime.gcDrainN (1 samples, 0.14%)</title><rect x="185.7" y="101" width="1.7" height="15.0" fill="rgb(213,39,17)" rx="2" ry="2" />
+<text  x="188.74" y="111.5" ></text>
+</g>
+<g >
+<title>syscall.Syscall (1 samples, 0.14%)</title><rect x="192.4" y="165" width="1.7" height="15.0" fill="rgb(240,198,23)" rx="2" ry="2" />
+<text  x="195.44" y="175.5" ></text>
+</g>
+<g >
+<title>syscall.Open (573 samples, 81.28%)</title><rect x="199.1" y="213" width="959.1" height="15.0" fill="rgb(207,66,16)" rx="2" ry="2" />
+<text  x="202.13" y="223.5" >syscall.Open</text>
+</g>
+<g >
+<title>syscall.(*LazyProc).Find (1 samples, 0.14%)</title><rect x="45.1" y="117" width="1.7" height="15.0" fill="rgb(215,53,42)" rx="2" ry="2" />
+<text  x="48.15" y="127.5" ></text>
+</g>
+<g >
+<title>runtime.cgocall (1 samples, 0.14%)</title><rect x="55.2" y="117" width="1.7" height="15.0" fill="rgb(207,167,53)" rx="2" ry="2" />
+<text  x="58.19" y="127.5" ></text>
+</g>
+<g >
+<title>syscall.SyscallN (8 samples, 1.13%)</title><rect x="31.8" y="69" width="13.3" height="15.0" fill="rgb(209,1,4)" rx="2" ry="2" />
+<text  x="34.76" y="79.5" ></text>
+</g>
+<g >
+<title>os.(*File).Close (1 samples, 0.14%)</title><rect x="192.4" y="261" width="1.7" height="15.0" fill="rgb(213,210,3)" rx="2" ry="2" />
+<text  x="195.44" y="271.5" ></text>
+</g>
+<g >
+<title>runtime.callers (1 samples, 0.14%)</title><rect x="187.4" y="133" width="1.7" height="15.0" fill="rgb(245,192,47)" rx="2" ry="2" />
+<text  x="190.42" y="143.5" ></text>
+</g>
+<g >
+<title>io.Copy (1 samples, 0.14%)</title><rect x="63.6" y="213" width="1.6" height="15.0" fill="rgb(217,164,47)" rx="2" ry="2" />
+<text  x="66.56" y="223.5" ></text>
+</g>
+<g >
+<title>runtime/pprof.(*profMap).lookup (1 samples, 0.14%)</title><rect x="1188.3" y="277" width="1.7" height="15.0" fill="rgb(254,69,7)" rx="2" ry="2" />
+<text  x="1191.33" y="287.5" ></text>
+</g>
+<g >
+<title>net/http.persistConnWriter.Write (1 samples, 0.14%)</title><rect x="60.2" y="277" width="1.7" height="15.0" fill="rgb(240,214,44)" rx="2" ry="2" />
+<text  x="63.21" y="287.5" ></text>
+</g>
+<g >
+<title>syscall.Syscall9 (573 samples, 81.28%)</title><rect x="199.1" y="181" width="959.1" height="15.0" fill="rgb(218,42,16)" rx="2" ry="2" />
+<text  x="202.13" y="191.5" >syscall.Syscall9</text>
+</g>
+<g >
+<title>runtime.cgocall (12 samples, 1.70%)</title><rect x="11.7" y="229" width="20.1" height="15.0" fill="rgb(244,220,39)" rx="2" ry="2" />
+<text  x="14.67" y="239.5" ></text>
+</g>
+<g >
+<title>runtime.systemstack (1 samples, 0.14%)</title><rect x="187.4" y="117" width="1.7" height="15.0" fill="rgb(230,78,29)" rx="2" ry="2" />
+<text  x="190.42" y="127.5" ></text>
+</g>
+<g >
+<title>net/http.(*Request).write (2 samples, 0.28%)</title><rect x="61.9" y="293" width="3.3" height="15.0" fill="rgb(241,48,39)" rx="2" ry="2" />
+<text  x="64.89" y="303.5" ></text>
+</g>
+<g >
+<title>internal/poll.(*FD).writeConsole (13 samples, 1.84%)</title><rect x="120.5" y="197" width="21.7" height="15.0" fill="rgb(225,42,50)" rx="2" ry="2" />
+<text  x="123.47" y="207.5" >i..</text>
+</g>
+<g >
+<title>indexbytebody (1 samples, 0.14%)</title><rect x="143.9" y="213" width="1.7" height="15.0" fill="rgb(215,90,48)" rx="2" ry="2" />
+<text  x="146.90" y="223.5" ></text>
+</g>
+<g >
+<title>bufio.(*Writer).Flush (1 samples, 0.14%)</title><rect x="60.2" y="293" width="1.7" height="15.0" fill="rgb(251,89,8)" rx="2" ry="2" />
+<text  x="63.21" y="303.5" ></text>
+</g>
+<g >
+<title>runtime.lockWithRank (1 samples, 0.14%)</title><rect x="1164.9" y="277" width="1.7" height="15.0" fill="rgb(240,77,12)" rx="2" ry="2" />
+<text  x="1167.89" y="287.5" ></text>
+</g>
+<g >
+<title>runtime.(*pageAlloc).scavengeOne (8 samples, 1.13%)</title><rect x="1171.6" y="277" width="13.4" height="15.0" fill="rgb(244,181,45)" rx="2" ry="2" />
+<text  x="1174.59" y="287.5" ></text>
+</g>
+<g >
+<title>runtime.divRoundUp (1 samples, 0.14%)</title><rect x="75.3" y="277" width="1.7" height="15.0" fill="rgb(207,224,48)" rx="2" ry="2" />
+<text  x="78.28" y="287.5" ></text>
+</g>
+<g >
+<title>runtime.concatstrings (1 samples, 0.14%)</title><rect x="142.2" y="213" width="1.7" height="15.0" fill="rgb(216,81,11)" rx="2" ry="2" />
+<text  x="145.23" y="223.5" ></text>
+</g>
+<g >
+<title>runtime.concatstrings (19 samples, 2.70%)</title><rect x="157.3" y="229" width="31.8" height="15.0" fill="rgb(205,68,8)" rx="2" ry="2" />
+<text  x="160.29" y="239.5" >ru..</text>
+</g>
+<g >
+<title>runtime.findnull (1 samples, 0.14%)</title><rect x="1158.2" y="245" width="1.7" height="15.0" fill="rgb(229,32,34)" rx="2" ry="2" />
+<text  x="1161.20" y="255.5" ></text>
+</g>
+<g >
+<title>internal/poll.execIO (1 samples, 0.14%)</title><rect x="60.2" y="213" width="1.7" height="15.0" fill="rgb(213,200,1)" rx="2" ry="2" />
+<text  x="63.21" y="223.5" ></text>
+</g>
+<g >
+<title>bufio.(*Scanner).Scan (8 samples, 1.13%)</title><rect x="143.9" y="245" width="13.4" height="15.0" fill="rgb(253,216,29)" rx="2" ry="2" />
+<text  x="146.90" y="255.5" ></text>
+</g>
+<g >
+<title>syscall.SyscallN (1 samples, 0.14%)</title><rect x="192.4" y="149" width="1.7" height="15.0" fill="rgb(228,50,18)" rx="2" ry="2" />
+<text  x="195.44" y="159.5" ></text>
+</g>
+<g >
+<title>runtime.callers.func1 (1 samples, 0.14%)</title><rect x="187.4" y="101" width="1.7" height="15.0" fill="rgb(240,47,14)" rx="2" ry="2" />
+<text  x="190.42" y="111.5" ></text>
+</g>
+<g >
+<title>runtime.pMask.set (1 samples, 0.14%)</title><rect x="1168.2" y="213" width="1.7" height="15.0" fill="rgb(248,195,5)" rx="2" ry="2" />
+<text  x="1171.24" y="223.5" ></text>
+</g>
+<g >
+<title>syscall.connectEx (8 samples, 1.13%)</title><rect x="31.8" y="101" width="13.3" height="15.0" fill="rgb(225,140,16)" rx="2" ry="2" />
+<text  x="34.76" y="111.5" ></text>
+</g>
+<g >
+<title>syscall.WSASend (1 samples, 0.14%)</title><rect x="60.2" y="181" width="1.7" height="15.0" fill="rgb(224,195,28)" rx="2" ry="2" />
+<text  x="63.21" y="191.5" ></text>
+</g>
+<g >
+<title>runtime.lfstackUnpack (1 samples, 0.14%)</title><rect x="77.0" y="229" width="1.6" height="15.0" fill="rgb(249,69,29)" rx="2" ry="2" />
+<text  x="79.95" y="239.5" ></text>
+</g>
+<g >
+<title>runtime.mallocgc (2 samples, 0.28%)</title><rect x="185.7" y="181" width="3.4" height="15.0" fill="rgb(237,178,34)" rx="2" ry="2" />
+<text  x="188.74" y="191.5" ></text>
+</g>
+<g >
+<title>runtime.schedule (2 samples, 0.28%)</title><rect x="1166.6" y="277" width="3.3" height="15.0" fill="rgb(231,153,42)" rx="2" ry="2" />
+<text  x="1169.57" y="287.5" ></text>
+</g>
+<g >
+<title>io.copyBuffer (1 samples, 0.14%)</title><rect x="63.6" y="197" width="1.6" height="15.0" fill="rgb(227,90,2)" rx="2" ry="2" />
+<text  x="66.56" y="207.5" ></text>
+</g>
+<g >
+<title>runtime.makeslice (1 samples, 0.14%)</title><rect x="140.6" y="165" width="1.6" height="15.0" fill="rgb(241,141,41)" rx="2" ry="2" />
+<text  x="143.55" y="175.5" ></text>
+</g>
+<g >
+<title>runtime.(*spanSet).push (1 samples, 0.14%)</title><rect x="73.6" y="261" width="1.7" height="15.0" fill="rgb(254,150,41)" rx="2" ry="2" />
+<text  x="76.60" y="271.5" ></text>
+</g>
+<g >
+<title>runtime.(*mheap).nextSpanForSweep (1 samples, 0.14%)</title><rect x="71.9" y="277" width="1.7" height="15.0" fill="rgb(245,52,54)" rx="2" ry="2" />
+<text  x="74.93" y="287.5" ></text>
+</g>
+<g >
+<title>github.com/enajera/indexer/process.IndexarCorreos (1 samples, 0.14%)</title><rect x="142.2" y="261" width="1.7" height="15.0" fill="rgb(220,22,4)" rx="2" ry="2" />
+<text  x="145.23" y="271.5" ></text>
+</g>
+<g >
+<title>net/http.(*persistConn).readLoop (3 samples, 0.43%)</title><rect x="55.2" y="309" width="5.0" height="15.0" fill="rgb(250,79,15)" rx="2" ry="2" />
+<text  x="58.19" y="319.5" ></text>
+</g>
+<g >
+<title>runtime.sweepone (6 samples, 0.85%)</title><rect x="66.9" y="293" width="10.1" height="15.0" fill="rgb(242,193,16)" rx="2" ry="2" />
+<text  x="69.91" y="303.5" ></text>
+</g>
+<g >
+<title>runtime.gostringnocopy (1 samples, 0.14%)</title><rect x="1158.2" y="261" width="1.7" height="15.0" fill="rgb(245,68,31)" rx="2" ry="2" />
+<text  x="1161.20" y="271.5" ></text>
+</g>
+<g >
+<title>syscall.Syscall9 (1 samples, 0.14%)</title><rect x="60.2" y="165" width="1.7" height="15.0" fill="rgb(248,18,31)" rx="2" ry="2" />
+<text  x="63.21" y="175.5" ></text>
+</g>
+<g >
+<title>net/http.(*wantConn).tryDeliver (1 samples, 0.14%)</title><rect x="53.5" y="293" width="1.7" height="15.0" fill="rgb(238,176,4)" rx="2" ry="2" />
+<text  x="56.52" y="303.5" ></text>
+</g>
+<g >
+<title>syscall.(*LazyProc).Find (1 samples, 0.14%)</title><rect x="51.8" y="165" width="1.7" height="15.0" fill="rgb(209,7,40)" rx="2" ry="2" />
+<text  x="54.84" y="175.5" ></text>
+</g>
+<g >
+<title>net.(*netFD).dial (12 samples, 1.70%)</title><rect x="31.8" y="197" width="20.0" height="15.0" fill="rgb(205,209,27)" rx="2" ry="2" />
+<text  x="34.76" y="207.5" ></text>
+</g>
+<g >
+<title>io.copyBuffer (2 samples, 0.28%)</title><rect x="61.9" y="245" width="3.3" height="15.0" fill="rgb(210,193,39)" rx="2" ry="2" />
+<text  x="64.89" y="255.5" ></text>
+</g>
+<g >
+<title>net/http.(*Transport).RoundTrip (2 samples, 0.28%)</title><rect x="189.1" y="197" width="3.3" height="15.0" fill="rgb(225,159,24)" rx="2" ry="2" />
+<text  x="192.09" y="207.5" ></text>
+</g>
+<g >
+<title>runtime.newproc.func1 (2 samples, 0.28%)</title><rect x="1185.0" y="293" width="3.3" height="15.0" fill="rgb(230,217,16)" rx="2" ry="2" />
+<text  x="1187.98" y="303.5" ></text>
+</g>
+<g >
+<title>net.(*netFD).Close (1 samples, 0.14%)</title><rect x="55.2" y="229" width="1.7" height="15.0" fill="rgb(244,142,14)" rx="2" ry="2" />
+<text  x="58.19" y="239.5" ></text>
+</g>
+<g >
+<title>net/http.(*Transport).dialConnFor (1 samples, 0.14%)</title><rect x="53.5" y="309" width="1.7" height="15.0" fill="rgb(225,89,28)" rx="2" ry="2" />
+<text  x="56.52" y="319.5" ></text>
+</g>
+<g >
+<title>runtime.checkTimers (1 samples, 0.14%)</title><rect x="1161.5" y="229" width="1.7" height="15.0" fill="rgb(230,66,49)" rx="2" ry="2" />
+<text  x="1164.55" y="239.5" ></text>
+</g>
+<g >
+<title>os.OpenFile (574 samples, 81.42%)</title><rect x="197.5" y="261" width="960.7" height="15.0" fill="rgb(246,199,43)" rx="2" ry="2" />
+<text  x="200.46" y="271.5" >os.OpenFile</text>
+</g>
+<g >
+<title>runtime.goready.func1 (1 samples, 0.14%)</title><rect x="1161.5" y="149" width="1.7" height="15.0" fill="rgb(213,121,49)" rx="2" ry="2" />
+<text  x="1164.55" y="159.5" ></text>
+</g>
+<g >
+<title>internal/poll.(*FD).decref (1 samples, 0.14%)</title><rect x="192.4" y="213" width="1.7" height="15.0" fill="rgb(219,186,12)" rx="2" ry="2" />
+<text  x="195.44" y="223.5" ></text>
+</g>
+<g >
+<title>bytes.IndexByte (1 samples, 0.14%)</title><rect x="143.9" y="229" width="1.7" height="15.0" fill="rgb(252,153,54)" rx="2" ry="2" />
+<text  x="146.90" y="239.5" ></text>
+</g>
+<g >
+<title>os.Open (574 samples, 81.42%)</title><rect x="197.5" y="277" width="960.7" height="15.0" fill="rgb(208,140,8)" rx="2" ry="2" />
+<text  x="200.46" y="287.5" >os.Open</text>
+</g>
+<g >
+<title>runtime.mapdelete_faststr (1 samples, 0.14%)</title><rect x="10.0" y="293" width="1.7" height="15.0" fill="rgb(226,200,23)" rx="2" ry="2" />
+<text  x="13.00" y="303.5" ></text>
+</g>
+<g >
+<title>net/http.(*persistConn).writeLoop (3 samples, 0.43%)</title><rect x="60.2" y="309" width="5.0" height="15.0" fill="rgb(244,20,45)" rx="2" ry="2" />
+<text  x="63.21" y="319.5" ></text>
+</g>
+<g >
+<title>syscall.(*LazyProc).mustFind (1 samples, 0.14%)</title><rect x="51.8" y="181" width="1.7" height="15.0" fill="rgb(210,95,24)" rx="2" ry="2" />
+<text  x="54.84" y="191.5" ></text>
+</g>
+<g >
+<title>runtime.concatstring2 (1 samples, 0.14%)</title><rect x="142.2" y="229" width="1.7" height="15.0" fill="rgb(207,152,33)" rx="2" ry="2" />
+<text  x="145.23" y="239.5" ></text>
+</g>
+<g >
+<title>runtime.acquirep (1 samples, 0.14%)</title><rect x="1163.2" y="229" width="1.7" height="15.0" fill="rgb(210,133,4)" rx="2" ry="2" />
+<text  x="1166.22" y="239.5" ></text>
+</g>
+<g >
+<title>runtime._ExternalCode (1 samples, 0.14%)</title><rect x="65.2" y="293" width="1.7" height="15.0" fill="rgb(223,117,18)" rx="2" ry="2" />
+<text  x="68.23" y="303.5" ></text>
+</g>
+<g >
+<title>internal/poll.(*FD).Init (1 samples, 0.14%)</title><rect x="45.1" y="149" width="1.7" height="15.0" fill="rgb(218,101,35)" rx="2" ry="2" />
+<text  x="48.15" y="159.5" ></text>
+</g>
+<g >
+<title>syscall.bind (3 samples, 0.43%)</title><rect x="46.8" y="149" width="5.0" height="15.0" fill="rgb(242,101,12)" rx="2" ry="2" />
+<text  x="49.82" y="159.5" ></text>
+</g>
+<g >
+<title>runtime.wakep (2 samples, 0.28%)</title><rect x="1185.0" y="277" width="3.3" height="15.0" fill="rgb(220,108,30)" rx="2" ry="2" />
+<text  x="1187.98" y="287.5" ></text>
+</g>
+<g >
+<title>runtime.resetspinning (1 samples, 0.14%)</title><rect x="1168.2" y="261" width="1.7" height="15.0" fill="rgb(226,128,32)" rx="2" ry="2" />
+<text  x="1171.24" y="271.5" ></text>
+</g>
+<g >
+<title>runtime/pprof.profileWriter (1 samples, 0.14%)</title><rect x="1188.3" y="309" width="1.7" height="15.0" fill="rgb(238,90,8)" rx="2" ry="2" />
+<text  x="1191.33" y="319.5" ></text>
+</g>
+<g >
+<title>runtime.main (620 samples, 87.94%)</title><rect x="120.5" y="309" width="1037.7" height="15.0" fill="rgb(250,112,14)" rx="2" ry="2" />
+<text  x="123.47" y="319.5" >runtime.main</text>
+</g>
+<g >
+<title>runtime.(*pageAlloc).scavenge.func1 (8 samples, 1.13%)</title><rect x="1171.6" y="293" width="13.4" height="15.0" fill="rgb(216,65,19)" rx="2" ry="2" />
+<text  x="1174.59" y="303.5" ></text>
+</g>
+<g >
+<title>runtime.ready (1 samples, 0.14%)</title><rect x="1161.5" y="133" width="1.7" height="15.0" fill="rgb(216,158,8)" rx="2" ry="2" />
+<text  x="1164.55" y="143.5" ></text>
+</g>
+<g >
+<title>syscall.Syscall (3 samples, 0.43%)</title><rect x="46.8" y="133" width="5.0" height="15.0" fill="rgb(211,75,38)" rx="2" ry="2" />
+<text  x="49.82" y="143.5" ></text>
+</g>
+<g >
+<title>runtime.rawstring (2 samples, 0.28%)</title><rect x="185.7" y="197" width="3.4" height="15.0" fill="rgb(218,199,9)" rx="2" ry="2" />
+<text  x="188.74" y="207.5" ></text>
+</g>
+<g >
+<title>runtime.systemstack (11 samples, 1.56%)</title><rect x="1169.9" y="309" width="18.4" height="15.0" fill="rgb(214,196,51)" rx="2" ry="2" />
+<text  x="1172.91" y="319.5" ></text>
+</g>
+<g >
+<title>syscall.SyscallN (12 samples, 1.70%)</title><rect x="11.7" y="245" width="20.1" height="15.0" fill="rgb(233,139,46)" rx="2" ry="2" />
+<text  x="14.67" y="255.5" ></text>
+</g>
+<g >
+<title>net.(*TCPConn).readFrom (1 samples, 0.14%)</title><rect x="63.6" y="165" width="1.6" height="15.0" fill="rgb(210,221,5)" rx="2" ry="2" />
+<text  x="66.56" y="175.5" ></text>
+</g>
+<g >
+<title>net.socket (13 samples, 1.84%)</title><rect x="31.8" y="213" width="21.7" height="15.0" fill="rgb(218,25,30)" rx="2" ry="2" />
+<text  x="34.76" y="223.5" >n..</text>
+</g>
+<g >
+<title>net.(*Resolver).lookupIP.func2 (12 samples, 1.70%)</title><rect x="11.7" y="309" width="20.1" height="15.0" fill="rgb(248,91,18)" rx="2" ry="2" />
+<text  x="14.67" y="319.5" ></text>
+</g>
+<g >
+<title>syscall.Closesocket (1 samples, 0.14%)</title><rect x="55.2" y="165" width="1.7" height="15.0" fill="rgb(219,111,6)" rx="2" ry="2" />
+<text  x="58.19" y="175.5" ></text>
+</g>
+<g >
+<title>runtime.sysUsed (1 samples, 0.14%)</title><rect x="1169.9" y="261" width="1.7" height="15.0" fill="rgb(236,42,44)" rx="2" ry="2" />
+<text  x="1172.91" y="271.5" ></text>
+</g>
+<g >
+<title>runtime.(*gcBits).bitp (1 samples, 0.14%)</title><rect x="87.0" y="229" width="1.7" height="15.0" fill="rgb(208,85,41)" rx="2" ry="2" />
+<text  x="89.99" y="239.5" ></text>
+</g>
+<g >
+<title>runtime.notewakeup (2 samples, 0.28%)</title><rect x="1185.0" y="245" width="3.3" height="15.0" fill="rgb(210,99,1)" rx="2" ry="2" />
+<text  x="1187.98" y="255.5" ></text>
+</g>
+<g >
+<title>runtime.cgocall (1 samples, 0.14%)</title><rect x="192.4" y="133" width="1.7" height="15.0" fill="rgb(231,5,10)" rx="2" ry="2" />
+<text  x="195.44" y="143.5" ></text>
+</g>
+<g >
+<title>runtime.findRunnable (3 samples, 0.43%)</title><rect x="1159.9" y="261" width="5.0" height="15.0" fill="rgb(212,188,17)" rx="2" ry="2" />
+<text  x="1162.87" y="271.5" ></text>
+</g>
+<g >
+<title>net/http.(*Transport).roundTrip (2 samples, 0.28%)</title><rect x="189.1" y="181" width="3.3" height="15.0" fill="rgb(214,2,22)" rx="2" ry="2" />
+<text  x="192.09" y="191.5" ></text>
+</g>
+<g >
+<title>runtime.readvarint (1 samples, 0.14%)</title><rect x="187.4" y="37" width="1.7" height="15.0" fill="rgb(233,65,2)" rx="2" ry="2" />
+<text  x="190.42" y="47.5" ></text>
+</g>
+<g >
+<title>aeshashbody (1 samples, 0.14%)</title><rect x="10.0" y="277" width="1.7" height="15.0" fill="rgb(236,226,25)" rx="2" ry="2" />
+<text  x="13.00" y="287.5" ></text>
+</g>
+<g >
+<title>runtime.scanobject (1 samples, 0.14%)</title><rect x="185.7" y="85" width="1.7" height="15.0" fill="rgb(254,12,37)" rx="2" ry="2" />
+<text  x="188.74" y="95.5" ></text>
+</g>
+<g >
+<title>net.(*sysDialer).dialParallel.func1 (13 samples, 1.84%)</title><rect x="31.8" y="309" width="21.7" height="15.0" fill="rgb(216,50,45)" rx="2" ry="2" />
+<text  x="34.76" y="319.5" >n..</text>
+</g>
+<g >
+<title>runtime.funcspdelta (1 samples, 0.14%)</title><rect x="187.4" y="69" width="1.7" height="15.0" fill="rgb(217,37,29)" rx="2" ry="2" />
+<text  x="190.42" y="79.5" ></text>
+</g>
+<g >
+<title>syscall.GetFileType (1 samples, 0.14%)</title><rect x="197.5" y="197" width="1.6" height="15.0" fill="rgb(241,229,28)" rx="2" ry="2" />
+<text  x="200.46" y="207.5" ></text>
+</g>
+<g >
+<title>internal/poll.(*FD).Close (1 samples, 0.14%)</title><rect x="55.2" y="213" width="1.7" height="15.0" fill="rgb(224,88,3)" rx="2" ry="2" />
+<text  x="58.19" y="223.5" ></text>
+</g>
+<g >
+<title>runtime.startm (2 samples, 0.28%)</title><rect x="1185.0" y="261" width="3.3" height="15.0" fill="rgb(206,202,32)" rx="2" ry="2" />
+<text  x="1187.98" y="271.5" ></text>
+</g>
+<g >
+<title>runtime.scanobject (24 samples, 3.40%)</title><rect x="80.3" y="245" width="40.2" height="15.0" fill="rgb(236,137,7)" rx="2" ry="2" />
+<text  x="83.30" y="255.5" >run..</text>
+</g>
+<g >
+<title>runtime.heapBits.next (1 samples, 0.14%)</title><rect x="78.6" y="245" width="1.7" height="15.0" fill="rgb(249,24,13)" rx="2" ry="2" />
+<text  x="81.62" y="255.5" ></text>
+</g>
+<g >
+<title>internal/poll.(*FD).Write.func1 (1 samples, 0.14%)</title><rect x="61.9" y="117" width="1.7" height="15.0" fill="rgb(239,141,25)" rx="2" ry="2" />
+<text  x="64.89" y="127.5" ></text>
+</g>
+<g >
+<title>io.copyBuffer (1 samples, 0.14%)</title><rect x="63.6" y="133" width="1.6" height="15.0" fill="rgb(230,97,1)" rx="2" ry="2" />
+<text  x="66.56" y="143.5" ></text>
+</g>
+<g >
+<title>runtime.(*mheap).alloc.func1 (1 samples, 0.14%)</title><rect x="1169.9" y="293" width="1.7" height="15.0" fill="rgb(207,45,22)" rx="2" ry="2" />
+<text  x="1172.91" y="303.5" ></text>
+</g>
+<g >
+<title>runtime.findObject (10 samples, 1.42%)</title><rect x="92.0" y="229" width="16.8" height="15.0" fill="rgb(219,47,45)" rx="2" ry="2" />
+<text  x="95.01" y="239.5" ></text>
+</g>
+<g >
+<title>runtime.(*mspan).divideByElemSize (1 samples, 0.14%)</title><rect x="90.3" y="229" width="1.7" height="15.0" fill="rgb(215,8,24)" rx="2" ry="2" />
+<text  x="93.34" y="239.5" ></text>
+</g>
+<g >
+<title>runtime.schedule (3 samples, 0.43%)</title><rect x="1159.9" y="277" width="5.0" height="15.0" fill="rgb(243,8,40)" rx="2" ry="2" />
+<text  x="1162.87" y="287.5" ></text>
+</g>
+<g >
+<title>net.(*netFD).Write (1 samples, 0.14%)</title><rect x="60.2" y="245" width="1.7" height="15.0" fill="rgb(247,12,16)" rx="2" ry="2" />
+<text  x="63.21" y="255.5" ></text>
+</g>
+<g >
+<title>runtime.stdcall3 (8 samples, 1.13%)</title><rect x="1171.6" y="229" width="13.4" height="15.0" fill="rgb(253,205,10)" rx="2" ry="2" />
+<text  x="1174.59" y="239.5" ></text>
+</g>
+<g >
+<title>runtime.add (1 samples, 0.14%)</title><rect x="1188.3" y="261" width="1.7" height="15.0" fill="rgb(251,132,11)" rx="2" ry="2" />
+<text  x="1191.33" y="271.5" ></text>
+</g>
+<g >
+<title>syscall.Syscall9 (8 samples, 1.13%)</title><rect x="31.8" y="85" width="13.3" height="15.0" fill="rgb(233,129,15)" rx="2" ry="2" />
+<text  x="34.76" y="95.5" ></text>
+</g>
+<g >
+<title>runtime.runOneTimer (1 samples, 0.14%)</title><rect x="1161.5" y="197" width="1.7" height="15.0" fill="rgb(242,29,42)" rx="2" ry="2" />
+<text  x="1164.55" y="207.5" ></text>
+</g>
+<g >
+<title>runtime.(*headTailIndex).incTail (1 samples, 0.14%)</title><rect x="73.6" y="245" width="1.7" height="15.0" fill="rgb(211,229,38)" rx="2" ry="2" />
+<text  x="76.60" y="255.5" ></text>
+</g>
+<g >
+<title>os.newFile (1 samples, 0.14%)</title><rect x="197.5" y="213" width="1.6" height="15.0" fill="rgb(223,95,41)" rx="2" ry="2" />
+<text  x="200.46" y="223.5" ></text>
+</g>
+<g >
+<title>runtime.cgocall (1 samples, 0.14%)</title><rect x="61.9" y="53" width="1.7" height="15.0" fill="rgb(215,24,12)" rx="2" ry="2" />
+<text  x="64.89" y="63.5" ></text>
+</g>
+<g >
+<title>syscall.Syscall6 (12 samples, 1.70%)</title><rect x="120.5" y="165" width="20.1" height="15.0" fill="rgb(212,100,51)" rx="2" ry="2" />
+<text  x="123.47" y="175.5" ></text>
+</g>
+<g >
+<title>runtime.cgocall (1 samples, 0.14%)</title><rect x="197.5" y="149" width="1.6" height="15.0" fill="rgb(213,215,48)" rx="2" ry="2" />
+<text  x="200.46" y="159.5" ></text>
+</g>
+<g >
+<title>os.(*File).read (7 samples, 0.99%)</title><rect x="145.6" y="229" width="11.7" height="15.0" fill="rgb(209,175,11)" rx="2" ry="2" />
+<text  x="148.57" y="239.5" ></text>
+</g>
+<g >
+<title>syscall.Syscall6 (7 samples, 0.99%)</title><rect x="145.6" y="165" width="11.7" height="15.0" fill="rgb(210,135,4)" rx="2" ry="2" />
+<text  x="148.57" y="175.5" ></text>
+</g>
+<g >
+<title>net/http.(*persistConn).closeLocked (1 samples, 0.14%)</title><rect x="55.2" y="261" width="1.7" height="15.0" fill="rgb(217,23,13)" rx="2" ry="2" />
+<text  x="58.19" y="271.5" ></text>
+</g>
+<g >
+<title>runtime.(*spanSet).pop (1 samples, 0.14%)</title><rect x="71.9" y="261" width="1.7" height="15.0" fill="rgb(232,40,2)" rx="2" ry="2" />
+<text  x="74.93" y="271.5" ></text>
+</g>
+<g >
+<title>runtime.isSystemGoroutine (1 samples, 0.14%)</title><rect x="1158.2" y="277" width="1.7" height="15.0" fill="rgb(233,99,5)" rx="2" ry="2" />
+<text  x="1161.20" y="287.5" ></text>
+</g>
+<g >
+<title>internal/poll.execIO (1 samples, 0.14%)</title><rect x="61.9" y="133" width="1.7" height="15.0" fill="rgb(254,30,10)" rx="2" ry="2" />
+<text  x="64.89" y="143.5" ></text>
+</g>
+<g >
+<title>runtime.cgocall (12 samples, 1.70%)</title><rect x="120.5" y="133" width="20.1" height="15.0" fill="rgb(223,141,23)" rx="2" ry="2" />
+<text  x="123.47" y="143.5" ></text>
+</g>
+<g >
+<title>net/http.(*persistConn).readLoop.func1 (1 samples, 0.14%)</title><rect x="55.2" y="293" width="1.7" height="15.0" fill="rgb(221,51,18)" rx="2" ry="2" />
+<text  x="58.19" y="303.5" ></text>
+</g>
+<g >
+<title>syscall.Syscall9 (1 samples, 0.14%)</title><rect x="61.9" y="85" width="1.7" height="15.0" fill="rgb(224,82,49)" rx="2" ry="2" />
+<text  x="64.89" y="95.5" ></text>
+</g>
+<g >
+<title>net.(*sysDialer).dialSerial (13 samples, 1.84%)</title><rect x="31.8" y="293" width="21.7" height="15.0" fill="rgb(206,143,13)" rx="2" ry="2" />
+<text  x="34.76" y="303.5" >n..</text>
+</g>
+<g >
+<title>runtime.runqput (1 samples, 0.14%)</title><rect x="1161.5" y="117" width="1.7" height="15.0" fill="rgb(236,195,49)" rx="2" ry="2" />
+<text  x="1164.55" y="127.5" ></text>
+</g>
+<g >
+<title>runtime.sysUsedOS (1 samples, 0.14%)</title><rect x="1169.9" y="245" width="1.7" height="15.0" fill="rgb(252,33,24)" rx="2" ry="2" />
+<text  x="1172.91" y="255.5" ></text>
+</g>
+<g >
+<title>internal/poll.(*FD).Write (13 samples, 1.84%)</title><rect x="120.5" y="213" width="21.7" height="15.0" fill="rgb(251,71,33)" rx="2" ry="2" />
+<text  x="123.47" y="223.5" >i..</text>
+</g>
+<g >
+<title>net/http.(*persistConn).close (1 samples, 0.14%)</title><rect x="55.2" y="277" width="1.7" height="15.0" fill="rgb(224,229,24)" rx="2" ry="2" />
+<text  x="58.19" y="287.5" ></text>
+</g>
+<g >
+<title>internal/poll.(*FD).Close (1 samples, 0.14%)</title><rect x="192.4" y="229" width="1.7" height="15.0" fill="rgb(208,185,47)" rx="2" ry="2" />
+<text  x="195.44" y="239.5" ></text>
+</g>
+<g >
+<title>net/http.(*persistConn).readResponse (2 samples, 0.28%)</title><rect x="56.9" y="293" width="3.3" height="15.0" fill="rgb(213,199,3)" rx="2" ry="2" />
+<text  x="59.87" y="303.5" ></text>
+</g>
+<g >
+<title>runtime.nextFreeFast (1 samples, 0.14%)</title><rect x="58.5" y="229" width="1.7" height="15.0" fill="rgb(248,140,49)" rx="2" ry="2" />
+<text  x="61.54" y="239.5" ></text>
+</g>
+<g >
+<title>runtime.goready (1 samples, 0.14%)</title><rect x="1161.5" y="165" width="1.7" height="15.0" fill="rgb(220,69,10)" rx="2" ry="2" />
+<text  x="1164.55" y="175.5" ></text>
+</g>
+<g >
+<title>runtime.gcAssistAlloc1 (1 samples, 0.14%)</title><rect x="185.7" y="117" width="1.7" height="15.0" fill="rgb(213,223,46)" rx="2" ry="2" />
+<text  x="188.74" y="127.5" ></text>
+</g>
+<g >
+<title>syscall.ConnectEx (8 samples, 1.13%)</title><rect x="31.8" y="117" width="13.3" height="15.0" fill="rgb(249,93,43)" rx="2" ry="2" />
+<text  x="34.76" y="127.5" ></text>
+</g>
+<g >
+<title>io.Copy (2 samples, 0.28%)</title><rect x="61.9" y="261" width="3.3" height="15.0" fill="rgb(210,65,3)" rx="2" ry="2" />
+<text  x="64.89" y="271.5" ></text>
+</g>
+<g >
+<title>strings.SplitAfter (1 samples, 0.14%)</title><rect x="195.8" y="261" width="1.7" height="15.0" fill="rgb(218,225,34)" rx="2" ry="2" />
+<text  x="198.79" y="271.5" ></text>
+</g>
+<g >
+<title>syscall.Syscall (1 samples, 0.14%)</title><rect x="55.2" y="149" width="1.7" height="15.0" fill="rgb(223,146,29)" rx="2" ry="2" />
+<text  x="58.19" y="159.5" ></text>
+</g>
+<g >
+<title>syscall.CloseHandle (1 samples, 0.14%)</title><rect x="192.4" y="181" width="1.7" height="15.0" fill="rgb(216,227,9)" rx="2" ry="2" />
+<text  x="195.44" y="191.5" ></text>
+</g>
+<g >
+<title>runtime.cgocall (8 samples, 1.13%)</title><rect x="31.8" y="53" width="13.3" height="15.0" fill="rgb(222,48,17)" rx="2" ry="2" />
+<text  x="34.76" y="63.5" ></text>
+</g>
+<g >
+<title>net.(*conn).Close (1 samples, 0.14%)</title><rect x="55.2" y="245" width="1.7" height="15.0" fill="rgb(254,202,3)" rx="2" ry="2" />
+<text  x="58.19" y="255.5" ></text>
+</g>
+<g >
+<title>syscall.GetAddrInfoW (12 samples, 1.70%)</title><rect x="11.7" y="277" width="20.1" height="15.0" fill="rgb(243,96,20)" rx="2" ry="2" />
+<text  x="14.67" y="287.5" ></text>
+</g>
+<g >
+<title>internal/poll.(*FD).destroy (1 samples, 0.14%)</title><rect x="55.2" y="181" width="1.7" height="15.0" fill="rgb(221,72,8)" rx="2" ry="2" />
+<text  x="58.19" y="191.5" ></text>
+</g>
+<g >
+<title>net/http.(*Client).send (2 samples, 0.28%)</title><rect x="189.1" y="229" width="3.3" height="15.0" fill="rgb(239,48,8)" rx="2" ry="2" />
+<text  x="192.09" y="239.5" ></text>
+</g>
+<g >
+<title>net.(*conn).Write (1 samples, 0.14%)</title><rect x="61.9" y="181" width="1.7" height="15.0" fill="rgb(241,171,54)" rx="2" ry="2" />
+<text  x="64.89" y="191.5" ></text>
+</g>
+<g >
+<title>internal/poll.(*FD).Write (1 samples, 0.14%)</title><rect x="60.2" y="229" width="1.7" height="15.0" fill="rgb(236,147,15)" rx="2" ry="2" />
+<text  x="63.21" y="239.5" ></text>
+</g>
+<g >
+<title>runtime.(*mheap).allocSpan (1 samples, 0.14%)</title><rect x="1169.9" y="277" width="1.7" height="15.0" fill="rgb(240,197,6)" rx="2" ry="2" />
+<text  x="1172.91" y="287.5" ></text>
+</g>
+<g >
+<title>runtime.sysUnused (8 samples, 1.13%)</title><rect x="1171.6" y="261" width="13.4" height="15.0" fill="rgb(233,138,19)" rx="2" ry="2" />
+<text  x="1174.59" y="271.5" ></text>
+</g>
+<g >
+<title>runtime.memmove (1 samples, 0.14%)</title><rect x="63.6" y="85" width="1.6" height="15.0" fill="rgb(238,196,8)" rx="2" ry="2" />
+<text  x="66.56" y="95.5" ></text>
+</g>
+<g >
+<title>runtime.(*mspan).base (1 samples, 0.14%)</title><rect x="88.7" y="229" width="1.6" height="15.0" fill="rgb(231,10,12)" rx="2" ry="2" />
+<text  x="91.67" y="239.5" ></text>
+</g>
+<g >
+<title>runtime/pprof.(*profileBuilder).addCPUData (1 samples, 0.14%)</title><rect x="1188.3" y="293" width="1.7" height="15.0" fill="rgb(226,144,32)" rx="2" ry="2" />
+<text  x="1191.33" y="303.5" ></text>
+</g>
+<g >
+<title>runtime.(*gcWork).tryGet (1 samples, 0.14%)</title><rect x="77.0" y="245" width="1.6" height="15.0" fill="rgb(238,15,0)" rx="2" ry="2" />
+<text  x="79.95" y="255.5" ></text>
+</g>
+<g >
+<title>runtime.systemstack (26 samples, 3.69%)</title><rect x="77.0" y="293" width="43.5" height="15.0" fill="rgb(227,10,5)" rx="2" ry="2" />
+<text  x="79.95" y="303.5" >runt..</text>
+</g>
+<g >
+<title>runtime.gosched_m (1 samples, 0.14%)</title><rect x="1164.9" y="293" width="1.7" height="15.0" fill="rgb(236,203,18)" rx="2" ry="2" />
+<text  x="1167.89" y="303.5" ></text>
+</g>
+<g >
+<title>net/http.(*Client).Do (2 samples, 0.28%)</title><rect x="189.1" y="261" width="3.3" height="15.0" fill="rgb(205,114,42)" rx="2" ry="2" />
+<text  x="192.09" y="271.5" ></text>
+</g>
+<g >
+<title>runtime.cgocall (573 samples, 81.28%)</title><rect x="199.1" y="149" width="959.1" height="15.0" fill="rgb(225,110,46)" rx="2" ry="2" />
+<text  x="202.13" y="159.5" >runtime.cgocall</text>
+</g>
+<g >
+<title>syscall.WSASend (1 samples, 0.14%)</title><rect x="61.9" y="101" width="1.7" height="15.0" fill="rgb(244,117,31)" rx="2" ry="2" />
+<text  x="64.89" y="111.5" ></text>
+</g>
+<g >
+<title>runtime.newobject (1 samples, 0.14%)</title><rect x="58.5" y="245" width="1.7" height="15.0" fill="rgb(250,91,48)" rx="2" ry="2" />
+<text  x="61.54" y="255.5" ></text>
+</g>
+<g >
+<title>net/http.send (2 samples, 0.28%)</title><rect x="189.1" y="213" width="3.3" height="15.0" fill="rgb(211,140,48)" rx="2" ry="2" />
+<text  x="192.09" y="223.5" ></text>
+</g>
+<g >
+<title>runtime.wakep (1 samples, 0.14%)</title><rect x="1168.2" y="245" width="1.7" height="15.0" fill="rgb(215,20,4)" rx="2" ry="2" />
+<text  x="1171.24" y="255.5" ></text>
+</g>
+<g >
+<title>internal/poll.(*FD).destroy (1 samples, 0.14%)</title><rect x="192.4" y="197" width="1.7" height="15.0" fill="rgb(206,188,22)" rx="2" ry="2" />
+<text  x="195.44" y="207.5" ></text>
+</g>
+<g >
+<title>runtime.gcAssistAlloc.func1 (1 samples, 0.14%)</title><rect x="185.7" y="133" width="1.7" height="15.0" fill="rgb(232,42,54)" rx="2" ry="2" />
+<text  x="188.74" y="143.5" ></text>
+</g>
+<g >
+<title>runtime.stopm (1 samples, 0.14%)</title><rect x="1166.6" y="245" width="1.6" height="15.0" fill="rgb(219,65,31)" rx="2" ry="2" />
+<text  x="1169.57" y="255.5" ></text>
+</g>
+<g >
+<title>syscall.SyscallN (1 samples, 0.14%)</title><rect x="60.2" y="149" width="1.7" height="15.0" fill="rgb(223,13,41)" rx="2" ry="2" />
+<text  x="63.21" y="159.5" ></text>
+</g>
+<g >
+<title>runtime.(*waitq).dequeue (1 samples, 0.14%)</title><rect x="53.5" y="277" width="1.7" height="15.0" fill="rgb(253,57,36)" rx="2" ry="2" />
+<text  x="56.52" y="287.5" ></text>
+</g>
+<g >
+<title>runtime.stopm (1 samples, 0.14%)</title><rect x="1163.2" y="245" width="1.7" height="15.0" fill="rgb(215,111,14)" rx="2" ry="2" />
+<text  x="1166.22" y="255.5" ></text>
+</g>
+<g >
+<title>runtime.rawstringtmp (2 samples, 0.28%)</title><rect x="185.7" y="213" width="3.4" height="15.0" fill="rgb(230,159,40)" rx="2" ry="2" />
+<text  x="188.74" y="223.5" ></text>
+</g>
+<g >
+<title>net.(*netFD).init (1 samples, 0.14%)</title><rect x="45.1" y="165" width="1.7" height="15.0" fill="rgb(213,11,3)" rx="2" ry="2" />
+<text  x="48.15" y="175.5" ></text>
+</g>
+<g >
+<title>net.(*conn).Write (1 samples, 0.14%)</title><rect x="60.2" y="261" width="1.7" height="15.0" fill="rgb(216,58,10)" rx="2" ry="2" />
+<text  x="63.21" y="271.5" ></text>
+</g>
+<g >
+<title>os.openFileNolog (574 samples, 81.42%)</title><rect x="197.5" y="245" width="960.7" height="15.0" fill="rgb(205,19,6)" rx="2" ry="2" />
+<text  x="200.46" y="255.5" >os.openFileNolog</text>
+</g>
+<g >
+<title>fmt.Println (13 samples, 1.84%)</title><rect x="120.5" y="261" width="21.7" height="15.0" fill="rgb(208,138,28)" rx="2" ry="2" />
+<text  x="123.47" y="271.5" >f..</text>
+</g>
+<g >
+<title>runtime.systemstack (1 samples, 0.14%)</title><rect x="185.7" y="149" width="1.7" height="15.0" fill="rgb(247,211,48)" rx="2" ry="2" />
+<text  x="188.74" y="159.5" ></text>
+</g>
+<g >
+<title>runtime.gcAssistAlloc (1 samples, 0.14%)</title><rect x="185.7" y="165" width="1.7" height="15.0" fill="rgb(231,9,22)" rx="2" ry="2" />
+<text  x="188.74" y="175.5" ></text>
+</g>
+<g >
+<title>runtime.goroutineReady (1 samples, 0.14%)</title><rect x="1161.5" y="181" width="1.7" height="15.0" fill="rgb(232,75,35)" rx="2" ry="2" />
+<text  x="1164.55" y="191.5" ></text>
+</g>
+<g >
+<title>runtime.profilealloc (1 samples, 0.14%)</title><rect x="187.4" y="165" width="1.7" height="15.0" fill="rgb(229,54,11)" rx="2" ry="2" />
+<text  x="190.42" y="175.5" ></text>
+</g>
+<g >
+<title>net.(*netFD).connect (12 samples, 1.70%)</title><rect x="31.8" y="181" width="20.0" height="15.0" fill="rgb(237,81,17)" rx="2" ry="2" />
+<text  x="34.76" y="191.5" ></text>
+</g>
+<g >
+<title>runtime.gcDrain (26 samples, 3.69%)</title><rect x="77.0" y="261" width="43.5" height="15.0" fill="rgb(223,162,23)" rx="2" ry="2" />
+<text  x="79.95" y="271.5" >runt..</text>
+</g>
+<g >
+<title>runtime.gcBgMarkWorker (26 samples, 3.69%)</title><rect x="77.0" y="309" width="43.5" height="15.0" fill="rgb(211,68,33)" rx="2" ry="2" />
+<text  x="79.95" y="319.5" >runt..</text>
+</g>
+<g >
+<title>internal/poll.execIO (8 samples, 1.13%)</title><rect x="31.8" y="149" width="13.3" height="15.0" fill="rgb(215,81,14)" rx="2" ry="2" />
+<text  x="34.76" y="159.5" ></text>
+</g>
+<g >
+<title>runtime.mcall (7 samples, 0.99%)</title><rect x="1158.2" y="309" width="11.7" height="15.0" fill="rgb(224,131,53)" rx="2" ry="2" />
+<text  x="1161.20" y="319.5" ></text>
+</g>
+<g >
+<title>internal/poll.(*FD).ConnectEx (8 samples, 1.13%)</title><rect x="31.8" y="165" width="13.3" height="15.0" fill="rgb(246,212,53)" rx="2" ry="2" />
+<text  x="34.76" y="175.5" ></text>
+</g>
+<g >
+<title>runtime.gcBgMarkWorker.func2 (26 samples, 3.69%)</title><rect x="77.0" y="277" width="43.5" height="15.0" fill="rgb(246,77,24)" rx="2" ry="2" />
+<text  x="79.95" y="287.5" >runt..</text>
+</g>
+<g >
+<title>runtime.lock2 (1 samples, 0.14%)</title><rect x="1164.9" y="261" width="1.7" height="15.0" fill="rgb(251,147,7)" rx="2" ry="2" />
+<text  x="1167.89" y="271.5" ></text>
+</g>
+<g >
+<title>syscall.Syscall (1 samples, 0.14%)</title><rect x="197.5" y="181" width="1.6" height="15.0" fill="rgb(254,104,20)" rx="2" ry="2" />
+<text  x="200.46" y="191.5" ></text>
+</g>
+<g >
+<title>syscall.SyscallN (7 samples, 0.99%)</title><rect x="145.6" y="149" width="11.7" height="15.0" fill="rgb(245,79,47)" rx="2" ry="2" />
+<text  x="148.57" y="159.5" ></text>
+</g>
+<g >
+<title>runtime.cgocall (7 samples, 0.99%)</title><rect x="145.6" y="133" width="11.7" height="15.0" fill="rgb(227,134,36)" rx="2" ry="2" />
+<text  x="148.57" y="143.5" ></text>
+</g>
+<g >
+<title>os.(*File).write (13 samples, 1.84%)</title><rect x="120.5" y="229" width="21.7" height="15.0" fill="rgb(226,37,45)" rx="2" ry="2" />
+<text  x="123.47" y="239.5" >o..</text>
+</g>
+<g >
+<title>net/http.ReadResponse (2 samples, 0.28%)</title><rect x="56.9" y="277" width="3.3" height="15.0" fill="rgb(237,117,4)" rx="2" ry="2" />
+<text  x="59.87" y="287.5" ></text>
+</g>
+<g >
+<title>runtime.(*sweepLocked).sweep (1 samples, 0.14%)</title><rect x="73.6" y="277" width="1.7" height="15.0" fill="rgb(241,174,45)" rx="2" ry="2" />
+<text  x="76.60" y="287.5" ></text>
+</g>
+<g >
+<title>strings.HasPrefix (1 samples, 0.14%)</title><rect x="194.1" y="261" width="1.7" height="15.0" fill="rgb(234,42,52)" rx="2" ry="2" />
+<text  x="197.11" y="271.5" ></text>
+</g>
+<g >
+<title>net.(*netFD).Write (1 samples, 0.14%)</title><rect x="61.9" y="165" width="1.7" height="15.0" fill="rgb(211,27,22)" rx="2" ry="2" />
+<text  x="64.89" y="175.5" ></text>
+</g>
+<g >
+<title>runtime.newobject (1 samples, 0.14%)</title><rect x="190.8" y="149" width="1.6" height="15.0" fill="rgb(250,100,20)" rx="2" ry="2" />
+<text  x="193.77" y="159.5" ></text>
+</g>
+<g >
+<title>runtime.spanOf (1 samples, 0.14%)</title><rect x="118.8" y="229" width="1.7" height="15.0" fill="rgb(205,91,3)" rx="2" ry="2" />
+<text  x="121.79" y="239.5" ></text>
+</g>
+<g >
+<title>all (705 samples, 100%)</title><rect x="10.0" y="325" width="1180.0" height="15.0" fill="rgb(236,91,46)" rx="2" ry="2" />
+<text  x="13.00" y="335.5" ></text>
+</g>
+<g >
+<title>syscall.SyscallN (12 samples, 1.70%)</title><rect x="120.5" y="149" width="20.1" height="15.0" fill="rgb(213,40,5)" rx="2" ry="2" />
+<text  x="123.47" y="159.5" ></text>
+</g>
+<g >
+<title>internal/poll.(*FD).Write.func1 (1 samples, 0.14%)</title><rect x="60.2" y="197" width="1.7" height="15.0" fill="rgb(233,201,25)" rx="2" ry="2" />
+<text  x="63.21" y="207.5" ></text>
+</g>
+<g >
+<title>os.(*file).close (1 samples, 0.14%)</title><rect x="192.4" y="245" width="1.7" height="15.0" fill="rgb(238,217,52)" rx="2" ry="2" />
+<text  x="195.44" y="255.5" ></text>
+</g>
+<g >
+<title>net/http.(*transferWriter).writeBody (2 samples, 0.28%)</title><rect x="61.9" y="277" width="3.3" height="15.0" fill="rgb(240,3,45)" rx="2" ry="2" />
+<text  x="64.89" y="287.5" ></text>
+</g>
+<g >
+<title>strings.(*Reader).Read (1 samples, 0.14%)</title><rect x="63.6" y="101" width="1.6" height="15.0" fill="rgb(244,93,28)" rx="2" ry="2" />
+<text  x="66.56" y="111.5" ></text>
+</g>
+<g >
+<title>runtime._System (1 samples, 0.14%)</title><rect x="65.2" y="309" width="1.7" height="15.0" fill="rgb(223,152,0)" rx="2" ry="2" />
+<text  x="68.23" y="319.5" ></text>
+</g>
+<g >
+<title>os.openFile (574 samples, 81.42%)</title><rect x="197.5" y="229" width="960.7" height="15.0" fill="rgb(219,217,32)" rx="2" ry="2" />
+<text  x="200.46" y="239.5" >os.openFile</text>
+</g>
+<g >
+<title>github.com/enajera/indexer/process.ProcesarArchivo (46 samples, 6.52%)</title><rect x="120.5" y="277" width="77.0" height="15.0" fill="rgb(220,112,50)" rx="2" ry="2" />
+<text  x="123.47" y="287.5" >github.c..</text>
+</g>
+<g >
+<title>runtime.stdcall4 (1 samples, 0.14%)</title><rect x="1169.9" y="229" width="1.7" height="15.0" fill="rgb(238,217,19)" rx="2" ry="2" />
+<text  x="1172.91" y="239.5" ></text>
+</g>
+<g >
+<title>syscall.ReadFile (7 samples, 0.99%)</title><rect x="145.6" y="197" width="11.7" height="15.0" fill="rgb(222,178,44)" rx="2" ry="2" />
+<text  x="148.57" y="207.5" ></text>
+</g>
+<g >
+<title>runtime.concatstring3 (19 samples, 2.70%)</title><rect x="157.3" y="245" width="31.8" height="15.0" fill="rgb(238,41,8)" rx="2" ry="2" />
+<text  x="160.29" y="255.5" >ru..</text>
+</g>
+<g >
+<title>net.(*sysDialer).dialTCP (13 samples, 1.84%)</title><rect x="31.8" y="261" width="21.7" height="15.0" fill="rgb(237,214,49)" rx="2" ry="2" />
+<text  x="34.76" y="271.5" >n..</text>
+</g>
+<g >
+<title>syscall.(*LazyProc).mustFind (1 samples, 0.14%)</title><rect x="45.1" y="133" width="1.7" height="15.0" fill="rgb(230,86,25)" rx="2" ry="2" />
+<text  x="48.15" y="143.5" ></text>
+</g>
+<g >
+<title>runtime.runtimer (1 samples, 0.14%)</title><rect x="1161.5" y="213" width="1.7" height="15.0" fill="rgb(253,227,32)" rx="2" ry="2" />
+<text  x="1164.55" y="223.5" ></text>
+</g>
+<g >
+<title>net.(*TCPConn).ReadFrom (1 samples, 0.14%)</title><rect x="63.6" y="181" width="1.6" height="15.0" fill="rgb(219,61,28)" rx="2" ry="2" />
+<text  x="66.56" y="191.5" ></text>
+</g>
+<g >
+<title>syscall.SyscallN (1 samples, 0.14%)</title><rect x="197.5" y="165" width="1.6" height="15.0" fill="rgb(231,172,38)" rx="2" ry="2" />
+<text  x="200.46" y="175.5" ></text>
+</g>
+<g >
+<title>indexbytebody (1 samples, 0.14%)</title><rect x="1158.2" y="229" width="1.7" height="15.0" fill="rgb(243,80,32)" rx="2" ry="2" />
+<text  x="1161.20" y="239.5" ></text>
+</g>
+<g >
+<title>runtime.markBits.isMarked (1 samples, 0.14%)</title><rect x="117.1" y="229" width="1.7" height="15.0" fill="rgb(248,186,33)" rx="2" ry="2" />
+<text  x="120.12" y="239.5" ></text>
+</g>
+<g >
+<title>net/http.persistConnWriter.Write (1 samples, 0.14%)</title><rect x="61.9" y="197" width="1.7" height="15.0" fill="rgb(214,140,31)" rx="2" ry="2" />
+<text  x="64.89" y="207.5" ></text>
+</g>
+<g >
+<title>runtime.stdcall6 (1 samples, 0.14%)</title><rect x="1159.9" y="229" width="1.6" height="15.0" fill="rgb(217,140,41)" rx="2" ry="2" />
+<text  x="1162.87" y="239.5" ></text>
+</g>
+<g >
+<title>runtime.netpoll (1 samples, 0.14%)</title><rect x="1159.9" y="245" width="1.6" height="15.0" fill="rgb(215,193,45)" rx="2" ry="2" />
+<text  x="1162.87" y="255.5" ></text>
+</g>
+<g >
+<title>runtime.selectgo (1 samples, 0.14%)</title><rect x="189.1" y="149" width="1.7" height="15.0" fill="rgb(205,27,51)" rx="2" ry="2" />
+<text  x="192.09" y="159.5" ></text>
+</g>
+<g >
+<title>runtime.semawakeup (2 samples, 0.28%)</title><rect x="1185.0" y="229" width="3.3" height="15.0" fill="rgb(246,103,16)" rx="2" ry="2" />
+<text  x="1187.98" y="239.5" ></text>
+</g>
+<g >
+<title>net.(*sysDialer).doDialTCP (13 samples, 1.84%)</title><rect x="31.8" y="245" width="21.7" height="15.0" fill="rgb(208,27,40)" rx="2" ry="2" />
+<text  x="34.76" y="255.5" >n..</text>
+</g>
+<g >
+<title>runtime.cgocall (3 samples, 0.43%)</title><rect x="46.8" y="101" width="5.0" height="15.0" fill="rgb(213,104,1)" rx="2" ry="2" />
+<text  x="49.82" y="111.5" ></text>
+</g>
+<g >
+<title>syscall.Syscall6 (12 samples, 1.70%)</title><rect x="11.7" y="261" width="20.1" height="15.0" fill="rgb(251,92,20)" rx="2" ry="2" />
+<text  x="14.67" y="271.5" ></text>
+</g>
+<g >
+<title>net/http.(*Client).do (2 samples, 0.28%)</title><rect x="189.1" y="245" width="3.3" height="15.0" fill="rgb(217,22,19)" rx="2" ry="2" />
+<text  x="192.09" y="255.5" ></text>
+</g>
+<g >
+<title>internal/poll.(*FD).Read (7 samples, 0.99%)</title><rect x="145.6" y="213" width="11.7" height="15.0" fill="rgb(207,172,16)" rx="2" ry="2" />
+<text  x="148.57" y="223.5" ></text>
+</g>
+<g >
+<title>net.(*sysDialer).dialSingle (13 samples, 1.84%)</title><rect x="31.8" y="277" width="21.7" height="15.0" fill="rgb(209,203,28)" rx="2" ry="2" />
+<text  x="34.76" y="287.5" >n..</text>
+</g>
+<g >
+<title>fmt.Fprintln (13 samples, 1.84%)</title><rect x="120.5" y="245" width="21.7" height="15.0" fill="rgb(208,131,35)" rx="2" ry="2" />
+<text  x="123.47" y="255.5" >f..</text>
+</g>
+<g >
+<title>internal/poll.(*FD).Write (1 samples, 0.14%)</title><rect x="61.9" y="149" width="1.7" height="15.0" fill="rgb(216,41,21)" rx="2" ry="2" />
+<text  x="64.89" y="159.5" ></text>
+</g>
+<g >
+<title>runtime.pcvalue (1 samples, 0.14%)</title><rect x="187.4" y="53" width="1.7" height="15.0" fill="rgb(223,28,4)" rx="2" ry="2" />
+<text  x="190.42" y="63.5" ></text>
+</g>
+<g >
+<title>runtime.startm (1 samples, 0.14%)</title><rect x="1168.2" y="229" width="1.7" height="15.0" fill="rgb(229,55,14)" rx="2" ry="2" />
+<text  x="1171.24" y="239.5" ></text>
+</g>
+<g >
+<title>bufio.(*Writer).Flush (1 samples, 0.14%)</title><rect x="61.9" y="213" width="1.7" height="15.0" fill="rgb(217,78,10)" rx="2" ry="2" />
+<text  x="64.89" y="223.5" ></text>
+</g>
+<g >
+<title>net.internetSocket (13 samples, 1.84%)</title><rect x="31.8" y="229" width="21.7" height="15.0" fill="rgb(206,142,42)" rx="2" ry="2" />
+<text  x="34.76" y="239.5" >n..</text>
+</g>
+<g >
+<title>runtime.mProf_Malloc (1 samples, 0.14%)</title><rect x="187.4" y="149" width="1.7" height="15.0" fill="rgb(208,142,54)" rx="2" ry="2" />
+<text  x="190.42" y="159.5" ></text>
+</g>
+<g >
+<title>net/textproto.MIMEHeader.Set (1 samples, 0.14%)</title><rect x="190.8" y="165" width="1.6" height="15.0" fill="rgb(231,228,32)" rx="2" ry="2" />
+<text  x="193.77" y="175.5" ></text>
+</g>
+<g >
+<title>io.(*LimitedReader).Read (1 samples, 0.14%)</title><rect x="63.6" y="117" width="1.6" height="15.0" fill="rgb(229,8,42)" rx="2" ry="2" />
+<text  x="66.56" y="127.5" ></text>
+</g>
+<g >
+<title>net.(*Resolver).lookupIP.func1 (12 samples, 1.70%)</title><rect x="11.7" y="293" width="20.1" height="15.0" fill="rgb(211,73,52)" rx="2" ry="2" />
+<text  x="14.67" y="303.5" ></text>
+</g>
+<g >
+<title>syscall.readFile (7 samples, 0.99%)</title><rect x="145.6" y="181" width="11.7" height="15.0" fill="rgb(254,212,39)" rx="2" ry="2" />
+<text  x="148.57" y="191.5" ></text>
+</g>
+<g >
+<title>runtime.goexit0 (4 samples, 0.57%)</title><rect x="1158.2" y="293" width="6.7" height="15.0" fill="rgb(253,104,13)" rx="2" ry="2" />
+<text  x="1161.20" y="303.5" ></text>
+</g>
+<g >
+<title>strings.genSplit (1 samples, 0.14%)</title><rect x="195.8" y="245" width="1.7" height="15.0" fill="rgb(227,34,42)" rx="2" ry="2" />
+<text  x="198.79" y="255.5" ></text>
+</g>
+<g >
+<title>github.com/enajera/indexer/process.MapearCorreos (27 samples, 3.83%)</title><rect x="143.9" y="261" width="45.2" height="15.0" fill="rgb(211,219,37)" rx="2" ry="2" />
+<text  x="146.90" y="271.5" >gith..</text>
+</g>
+<g >
+<title>runtime.stealWork (1 samples, 0.14%)</title><rect x="1161.5" y="245" width="1.7" height="15.0" fill="rgb(216,109,47)" rx="2" ry="2" />
+<text  x="1164.55" y="255.5" ></text>
+</g>
+</g>
+</svg>
