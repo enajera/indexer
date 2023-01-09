@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-
+    "github.com/spf13/viper"
 	_ "net/http/pprof"
 
 	"github.com/enajera/indexer/internal/process"
@@ -27,6 +27,13 @@ func main() {
 	fmt.Println(string(banner))
 	fmt.Println()
 
+	//Viper para leer archivo de configuracion
+	viper.AddConfigPath("./pkg/config")
+	viper.SetConfigName("config") // Register config file name (no extension)
+    viper.SetConfigType("json")   // Look for specific type
+    viper.ReadInConfig()
+    
+
 	// Si solo viene un argumento, lanza error
 	if len(os.Args) < 2 {
 		fmt.Println("Error: no se ha especificado el nombre del archivo de base de datos")
@@ -38,7 +45,7 @@ func main() {
 	var wg sync.WaitGroup
 	// Servidor de profiling
 	go func() {
-		fmt.Println(http.ListenAndServe("localhost:6060", nil))
+		fmt.Println(http.ListenAndServe(viper.GetString("pprof"), nil))
 	}()
 	wg.Add(1) //pprof - so we won't exit prematurely
 	wg.Add(1) //run method
@@ -74,7 +81,7 @@ func Run(file string, wg *sync.WaitGroup) {
 	fmt.Printf("Indexando correos en ZincSearch... \n")
 	indexing := time.Now()
 	//Enviar correos a ZincSearch
-	//IndexarCorreosMasivos(correos)
+	IndexarCorreosMasivos(correos)
 
 	fmt.Println("------------------------------------------------")
 	endexing := time.Since(indexing)
@@ -113,7 +120,7 @@ func IndexarCorreosMasivos(correos any) error {
 		Index   string `json:"index"`
 		Records any    `json:"records"`
 	}{
-		Index:   "enronmails_bulk",
+		Index:   viper.GetString("index"),
 		Records: correos,
 	}
 
@@ -121,12 +128,12 @@ func IndexarCorreosMasivos(correos any) error {
 	if err != nil {
 		return err
 	}
-
-	req, err := http.NewRequest("POST", "http://localhost:4080/api/_bulkv2", bytes.NewBuffer(emailJSON))
+   
+	req, err := http.NewRequest("POST", viper.GetString("api"), bytes.NewBuffer(emailJSON))
 	if err != nil {
 		return fmt.Errorf("Error:%s", err)
 	}
-	req.SetBasicAuth("admin", "Complexpass#123")
+	req.SetBasicAuth(viper.GetString("user"), viper.GetString("pass"))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)

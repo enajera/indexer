@@ -1,0 +1,8 @@
+{
+    "api":"http://localhost:4080/api/_bulkv2",
+    "pprof":"localhost:6060",
+    "index":"vinemail",
+    "user":"admin",
+    "pass":"Complexpass#123"
+
+}
