@@ -1,18 +1,21 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
-    "github.com/spf13/viper"
-	_ "net/http/pprof"
+
+	"github.com/spf13/viper"
 
 	"github.com/enajera/indexer/internal/process"
 )
@@ -58,6 +61,19 @@ func Run(file string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	// Inicia tiempo de ejecución
 	start := time.Now()
+
+    scanner := bufio.NewScanner(os.Stdin)
+	var index string
+	for index == "" {
+		fmt.Print("Ingresa el nombre de archivo: ")
+		scanner.Scan()
+		index = strings.TrimSpace(scanner.Text())
+		if index == "" {
+			fmt.Println("No se ha ingresado nombre de archivo")
+		}
+	}
+	 
+
 	// Obtiene las rutas de todos los archivos de la carpeta principal y sus subcarpetas
 	filePaths, err := getFilePaths(file)
 	if err != nil {
@@ -78,10 +94,10 @@ func Run(file string, wg *sync.WaitGroup) {
 	fmt.Printf("Tiempo de procesamiento de correos: %s\n", process)
 
 	fmt.Println("------------------------------------------------")
-	fmt.Printf("Indexando correos en ZincSearch... \n")
+	fmt.Printf("Indexando correos a ZincSearch... \n")
 	indexing := time.Now()
 	//Enviar correos a ZincSearch
-	IndexarCorreosMasivos(correos)
+	IndexarCorreosMasivos(correos, index)
 
 	fmt.Println("------------------------------------------------")
 	endexing := time.Since(indexing)
@@ -107,20 +123,20 @@ func getFilePaths(root string) ([]string, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("Error al recorrer el archivo: %s", err)
+		return nil, fmt.Errorf("error al recorrer el archivo: %s", err)
 	}
 	return paths, nil
 }
 
 // IndexarCorreos indexa una slice de correos en Zincsearch de manera compleja
-func IndexarCorreosMasivos(correos any) error {
+func IndexarCorreosMasivos(correos any, index string) error {
 
 	// Crea una estructura que se ajusta al formato Json que pide ZincSearch
 	data := struct {
 		Index   string `json:"index"`
 		Records any    `json:"records"`
 	}{
-		Index:   viper.GetString("index"),
+		Index:   index,
 		Records: correos,
 	}
 

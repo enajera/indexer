@@ -1,7 +1,7 @@
 {
     "api":"http://localhost:4080/api/_bulkv2",
     "pprof":"localhost:6060",
-    "index":"vinemail",
+    "index":"cesar_mails",
     "user":"admin",
     "pass":"Complexpass#123"
 
