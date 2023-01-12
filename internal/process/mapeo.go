@@ -12,7 +12,8 @@ func MapearCorreos(filePath string) *Email {
 	// Abre el archivo en la ruta especificada
 	file, err := os.Open(filePath)
 	if err != nil {
-		fmt.Errorf("Error al abrir el archivo: %s", file)
+		fmt.Printf("error al abrir el archivo: %s", err)
+		
 	}
 	defer file.Close() // Cierra el archivo al finalizar la función
 
