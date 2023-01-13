@@ -81,6 +81,9 @@ func Run(file string, wg *sync.WaitGroup) {
 		return
 	}
 
+	fmt.Println("------------------------------------------------")
+	fmt.Println("Procesando correos ... ")
+
 	//Procesamiento de archivos
 	correos, err := process.ProcesarArchivo(filePaths)
 	if err != nil {
@@ -144,7 +147,10 @@ func IndexarCorreosMasivos(correos any, index string) error {
 	if err != nil {
 		return err
 	}
-   
+     
+
+	// fmt.Println(string(emailJSON))
+
 	req, err := http.NewRequest("POST", viper.GetString("api"), bytes.NewBuffer(emailJSON))
 	if err != nil {
 		return fmt.Errorf("Error:%s", err)
@@ -164,6 +170,11 @@ func IndexarCorreosMasivos(correos any, index string) error {
 	}
 	// fmt.Println(string(body))
 	fmt.Println(resp.StatusCode, "-", string(body))
+	if(resp.StatusCode==200) {
+		fmt.Println("Proceso exitoso")
+	}else{
+		fmt.Println("Proceso fallido")
+	}
 
 	return nil
 
