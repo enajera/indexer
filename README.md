@@ -1,28 +1,20 @@
-# Indexer
-Challenge que indexa correos electronicos a Zincsearch
+# Indexer :mailbox_with_mail:
+Programa en Go que indexa correos electronicos a Zincsearch
 
-,--.             ,--.
-|  | ,--,--,   ,-|  |  ,---.  ,--.  ,--.  ,---.  ,--.--. 
-|  | |      \ ' .-. | | .-. :  \  `'  /  | .-. : |  .--'
-|  | |  ||  | \ `-' | \   --.  /  /.  \  \   --. |  |
-`--' `--''--'  `---'   `----' '--'  '--'  `----' `--'
+![Process](internal/process/Process.png)
 
-ZincSearch Indexer 1.0
-Powered by Elvin Nájera
+## Profiling Mejorado aplicando concurrencia 📊
+### CPU - Heap 
 
-Ingresa el nombre de archivo: prueba_emails
-Archivos procesados: 21
-Tiempo de procesamiento de correos: 8.0142352s
-------------------------------------------------
-Indexando correos a ZincSearch...
-200 - {"message":"v2 data inserted","record_count":21}
-------------------------------------------------
-Tiempo de indexado de correos: 18.6845ms
-------------------------------------------------
-Tiempo Total: 8.0339875s
+#### Antes
+Archivos procesados: 517425
+
+Tiempo de ejecución: 2h37m23.0416788s
+![Antes](internal/profiling/profile_heap.png)
 
 
-# Profiling Mejorado aplicando concurrencia 📊
-## CPU - Heap 
+#### Despues
+Archivos procesados: 517425
 
-![HEAP](internal/profiling/profile_mejorado.png)
+Tiempo Total: 37m59.3782087s 
+![Despues](internal/profiling/profile_mejorado.png)
